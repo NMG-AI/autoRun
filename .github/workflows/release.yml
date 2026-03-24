@@ -51,13 +51,13 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
-          Copy-Item "dist/autoRun.exe" "release-assets/autoRun-${{ github.ref_name }}-${{ matrix.platform }}-${{ matrix.arch }}.exe"
+          Copy-Item "dist/autoRun/autoRun.exe" "release-assets/autoRun-${{ github.ref_name }}-${{ matrix.platform }}-${{ matrix.arch }}.exe"
 
       - name: Prepare release asset (macOS/Linux)
         if: matrix.platform != 'windows'
         run: |
           mkdir -p release-assets
-          cp "dist/autoRun" "release-assets/autoRun-${{ github.ref_name }}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}"
+          cp "dist/autoRun/autoRun" "release-assets/autoRun-${{ github.ref_name }}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}"
 
       - name: Verify artifact (Windows)
         if: matrix.platform == 'windows'
