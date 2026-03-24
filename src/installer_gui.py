@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """自动安装程序 GUI - 使用 Tkinter 实现跨平台自动安装"""
 
+import os
 import platform
+import shutil
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -270,13 +272,83 @@ class AutoInstallerApp:
             except Exception:
                 return False
         else:
-            # 弹窗模式：显示终端窗口，允许交互
-            result = subprocess.run(
-                command,
-                text=True,
-                timeout=300,
-            )
-            return result.returncode == 0
+            # 非静默模式：打开新终端窗口执行，允许交互
+            return self._run_in_new_terminal(command, system)
+
+    def _run_in_new_terminal(self, command: list[str], system: str) -> bool:
+        """在新终端窗口中运行命令，允许用户交互"""
+        try:
+            if system == "Windows":
+                # Windows: 打开新 PowerShell 窗口执行
+                # command 是 ["powershell", "-Command", "..."]，提取实际命令
+                actual_command = " ".join(command[2:])  # 取 "iwr ... | iex"
+                subprocess.Popen(
+                    ["powershell", "-NoExit", "-Command", actual_command],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                )
+                return True
+            elif system == "Darwin":
+                # macOS: 使用 Terminal.app 打开窗口执行脚本
+                # 先将命令写入临时脚本文件，避免 AppleScript 转义问题
+                import tempfile
+
+                cmd_str = " ".join(command)
+
+                # 创建临时脚本
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".sh", delete=False
+                ) as f:
+                    f.write("#!/bin/bash\n")
+                    f.write(cmd_str + "\n")
+                    script_path = f.name
+
+                os.chmod(script_path, 0o755)
+
+                # 使用多行 AppleScript，需要用多个 -e 参数
+                result = subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        "tell application \"Terminal\"",
+                        "-e",
+                        "activate",
+                        "-e",
+                        f'do script "bash {script_path}"',
+                        "-e",
+                        "end tell",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+                # 写入日志
+                log_path = os.path.expanduser("~/auto_installer.log")
+                with open(log_path, "a") as f:
+                    f.write(f"osascript result: returncode={result.returncode}\n")
+                    f.write(f"stdout: {result.stdout}\n")
+                    f.write(f"stderr: {result.stderr}\n")
+                    f.write(f"script_path: {script_path}\n")
+                    f.write("---\n")
+
+                return result.returncode == 0
+            else:
+                # Linux: 尝试多个终端模拟器
+                terminals = [
+                    ("gnome-terminal", ["--", "bash", "-c"]),
+                    ("konsole", ["--hold", "-e"]),
+                    ("xfce4-terminal", ["-e"]),
+                    ("xterm", ["-e"]),
+                    ("mate-terminal", ["-e"]),
+                ]
+                for terminal, args in terminals:
+                    if shutil.which(terminal):
+                        subprocess.Popen([terminal] + args + [" ".join(command)])
+                        return True
+                return False
+            return True
+        except Exception:
+            return False
 
     def _start_installation(self) -> None:
         """开始安装流程"""
@@ -305,24 +377,39 @@ class AutoInstallerApp:
 
         try:
             success = self._run_installation(command)
-
-            if success:
-                self.status_label.config(text="✅ 状态：安装成功！", fg=self.COLORS["text_success"])
-                if not self.config.silent:
-                    messagebox.showinfo("✅ 成功", "安装完成！")
-            else:
-                self.status_label.config(text="❌ 状态：安装失败", fg=self.COLORS["text_error"])
-                if not self.config.silent:
-                    messagebox.showerror("❌ 错误", "安装脚本执行失败")
         except subprocess.TimeoutExpired:
             self.status_label.config(text="❌ 状态：安装超时", fg=self.COLORS["text_error"])
-            if not self.config.silent:
+            if self.config.silent:
                 messagebox.showerror("❌ 错误", "安装超时，请检查网络连接")
+            return
         except Exception as e:
             self.status_label.config(text="❌ 状态：安装失败", fg=self.COLORS["text_error"])
-            if not self.config.silent:
+            if self.config.silent:
                 messagebox.showerror("❌ 错误", f"发生错误：{str(e)}")
-        finally:
+            return
+
+        # 根据 silent 配置处理结果
+        if self.config.silent:
+            if success:
+                self.status_label.config(
+                    text="✅ 状态：安装成功！", fg=self.COLORS["text_success"]
+                )
+                messagebox.showinfo("✅ 成功", "安装完成！")
+            else:
+                self.status_label.config(
+                    text="❌ 状态：安装失败", fg=self.COLORS["text_error"]
+                )
+                messagebox.showerror("❌ 错误", "安装脚本执行失败")
+        else:
+            # 非静默模式：已在终端中显示输出
+            if success:
+                self.status_label.config(
+                    text="🚀 已在终端窗口中打开安装程序", fg=self.COLORS["text_info"]
+                )
+            else:
+                self.status_label.config(
+                    text="❌ 状态：无法打开终端窗口", fg=self.COLORS["text_error"]
+                )
             self.progress_bar.stop()
             self.install_button.config(state="normal")
             self.button_canvas.itemconfig(
