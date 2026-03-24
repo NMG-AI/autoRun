@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: windows
+            arch: amd64
+            artifact_name: installer-windows
+            ext: .exe
+          - runner: macos-latest
+            platform: macos
+            arch: arm64
+            artifact_name: installer-macos-arm64
+            ext: .bin
+          - runner: ubuntu-latest
+            platform: linux
+            arch: amd64
+            artifact_name: installer-linux
+            ext: .bin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: pip install -r requirements-build.txt
+
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm autoRun.spec
+
+      - name: Prepare release asset (Windows)
+        if: matrix.platform == 'windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item "dist/autoRun.exe" "release-assets/autoRun-${{ github.ref_name }}-${{ matrix.platform }}-${{ matrix.arch }}.exe"
+
+      - name: Prepare release asset (macOS/Linux)
+        if: matrix.platform != 'windows'
+        run: |
+          mkdir -p release-assets
+          cp "dist/autoRun" "release-assets/autoRun-${{ github.ref_name }}-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}"
+
+      - name: Verify artifact (Windows)
+        if: matrix.platform == 'windows'
+        run: dir release-assets
+
+      - name: Verify artifact (macOS/Linux)
+        if: matrix.platform != 'windows'
+        run: ls -la release-assets
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release-assets/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: Flatten assets for release
+        run: |
+          mkdir -p release-assets
+          cp artifacts/installer-windows/* release-assets/ 2>/dev/null || true
+          cp artifacts/installer-macos-arm64/* release-assets/ 2>/dev/null || true
+          cp artifacts/installer-linux/* release-assets/ 2>/dev/null || true
+          ls -la release-assets
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: release-assets/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
